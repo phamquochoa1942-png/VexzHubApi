@@ -1,260 +1,151 @@
 const express = require('express');
-const crypto = require('crypto');
 const app = express();
 const port = process.env.PORT || 3000;
 
 app.use(express.json());
 
+// Cau truc giong Kuri
 let apiData = {
   api: {
-    id: "vexz-v5-7d2c8f41",
-    name: "Vexz Hub API",
-    owner: "Hoa", // Đã sửa cú pháp dấu :
+    id: "2bcbf4f96454",
+    name: "Vexz Hub",
+    owner: "Hoa",
     ttl: 60000
   },
-  jobs: {
-    low_players: [],
-    full_moon: [],
-    mirage_island: [],
-    elite_pirate: [],
-    dough_king: [],
-    rip_indra: [],
-    other_bosses: []
-  }
+  jobs: {}
 };
 
 let serverTimestamps = {};
-
 const SECRET_KEY = 42;
 const AUTH_PREFIX = "HoaHubHere-";
-const HMAC_SECRET = "VexzSecretKey2024!@#$";
 
 // Ham giai ma XOR
-function xorDecrypt(encryptedString, key) {
-  let decryptedString = '';
-  for (let i = 0; i < encryptedString.length; i++) {
-    let charCode = encryptedString.charCodeAt(i);
-    let decryptedCharCode = charCode ^ key;
-    decryptedString += String.fromCharCode(decryptedCharCode);
+function xorDecrypt(str, key) {
+  let result = '';
+  for (let i = 0; i < str.length; i++) {
+    result += String.fromCharCode(str.charCodeAt(i) ^ key);
   }
-  return decryptedString;
+  return result;
 }
 
 // Ham giai ma Base64
-function base64Decode(encodedString) {
-  return Buffer.from(encodedString, 'base64').toString('utf8');
+function base64Decode(str) {
+  return Buffer.from(str, 'base64').toString('utf8');
 }
 
-// Ham tao HMAC signature
-function createHMAC(data) {
-  return crypto.createHmac('sha256', HMAC_SECRET).update(data).digest('hex');
+// Ham giai ma Job giong Kuri (Base64 + XOR)
+function decryptJob(encryptedJob) {
+  // Cat bo tien to
+  let encoded = encryptedJob.substring(AUTH_PREFIX.length);
+  // Giai ma Base64
+  let decoded = base64Decode(encoded);
+  // Giai ma XOR
+  let jobId = xorDecrypt(decoded, SECRET_KEY);
+  return jobId;
 }
 
-// Ham verify HMAC signature chống Timing Attack cực tốt
-function verifyHMAC(data, signature) {
-  try {
-    const expected = createHMAC(data);
-    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
-  } catch (e) {
-    return false;
+// Ham xoa trung lap
+function removeDuplicates(arr) {
+  let seen = new Map();
+  for (let item of arr) {
+    if (item && item.job) {
+      seen.set(item.job, item);
+    }
   }
+  return Array.from(seen.values());
 }
 
-// Ham giai ma nhieu lop đồng bộ 100% với Script Lua đa tầng
-function multiLayerDecrypt(encryptedData) {
-  let step1 = base64Decode(encryptedData);
-  let step2 = xorDecrypt(step1, SECRET_KEY);
-  let step3 = Buffer.from(step2, 'base64').toString('utf8'); // Lớp cuối bọc chuẩn utf8/binary
-  return step3;
-}
-
-// Hàm lọc trùng nâng cấp: xóa bỏ server có jobId cũ ra khỏi mảng
-function filterDuplicate(category, jobId) {
-  apiData.jobs[category] = apiData.jobs[category].filter(server => server.job_id !== jobId);
-}
-
-// HÀM PHÂN LOẠI "ALL HOP" ĐÃ SỬA LOGIC LOẠI TRỪ
-function classifyAndUpdateServer(newServerData) {
-  let jobId = newServerData.job_id;
-  let playersCount = newServerData.players;
-  let sea = newServerData.sea;
-  let tags = newServerData.tags || [];
-  let currentBoss = newServerData.current_boss || '';
-
-  let serverEntry = {
-    job_id: jobId,
-    players: playersCount,
-    sea: sea,
-    tags: tags,
-    current_boss: currentBoss,
-    last_updated: Date.now()
-  };
-
-  serverTimestamps[jobId] = Date.now();
-
-  // Dọn dẹp bản ghi cũ của server này ở TẤT CẢ các danh mục trước khi phân loại lại
-  Object.keys(apiData.jobs).forEach(category => {
-    filterDuplicate(category, jobId);
-  });
-
-  let isClassified = false;
-
-  // Check 1: Server ít người
-  if (playersCount <= 4) {
-    apiData.jobs.low_players.push(serverEntry);
-    isClassified = true;
-  }
-
-  // Check 2: Các sự kiện qua Tags (Chạy song song không loại trừ)
-  if (tags.includes('Full Moon')) {
-    apiData.jobs.full_moon.push(serverEntry);
-    isClassified = true;
-  }
-  if (tags.includes('Mirage Island')) {
-    apiData.jobs.mirage_island.push(serverEntry);
-    isClassified = true;
-  }
-  if (tags.includes('Elite Pirate')) {
-    apiData.jobs.elite_pirate.push(serverEntry);
-    isClassified = true;
-  }
-
-  // Check 3: Boss lớn mục tiêu công phá
-  if (currentBoss === 'Dough King' || currentBoss === 'dough_king') {
-    apiData.jobs.dough_king.push(serverEntry);
-    isClassified = true;
-  } else if (currentBoss === 'Rip Indra' || currentBoss === 'rip_indra') {
-    apiData.jobs.rip_indra.push(serverEntry);
-    isClassified = true;
-  }
-
-  // Check 4: Nếu không thuộc diện ưu tiên nào ở trên mà có boss khác thì đẩy vào Boss phụ
-  if (!isClassified && currentBoss && currentBoss !== '') {
-    apiData.jobs.other_bosses.push(serverEntry);
-  }
-}
-
-// Tự động quét dọn server die (Chạy mỗi 1 phút để cập nhật nhanh, dọn phòng quá 5 phút)
+// Ham don dep server cu
 function clearStaleServers() {
-  let currentTime = Date.now();
-  let staleThreshold = 5 * 60 * 1000;
+  let now = Date.now();
+  let threshold = 5 * 60 * 1000; // 5 phut
 
-  for (let category in apiData.jobs) {
-    if (apiData.jobs.hasOwnProperty(category)) {
-      apiData.jobs[category] = apiData.jobs[category].filter(server => {
-        if (server && server.job_id) {
-          let lastUpdate = serverTimestamps[server.job_id];
-          return lastUpdate && (currentTime - lastUpdate) < staleThreshold;
+  for (let boss in apiData.jobs) {
+    if (apiData.jobs.hasOwnProperty(boss)) {
+      apiData.jobs[boss] = apiData.jobs[boss].filter(server => {
+        if (server && server.job) {
+          let lastUpdate = serverTimestamps[server.job];
+          return lastUpdate && (now - lastUpdate) < threshold;
         }
         return false;
       });
+      
+      // Xoa muc boss neu rong
+      if (apiData.jobs[boss].length === 0) {
+        delete apiData.jobs[boss];
+      }
     }
   }
   
-  for (let jobId in serverTimestamps) {
-    if ((currentTime - serverTimestamps[jobId]) >= staleThreshold) {
-      delete serverTimestamps[jobId];
+  // Don dep serverTimestamps
+  for (let job in serverTimestamps) {
+    if ((now - serverTimestamps[job]) >= threshold) {
+      delete serverTimestamps[job];
     }
   }
 }
-setInterval(clearStaleServers, 60 * 1000); // 1 phút quét dọn 1 lần cho mượt
 
+setInterval(clearStaleServers, 5 * 60 * 1000);
+
+// Endpoint GET /api-data
 app.get('/api-data', (req, res) => {
   res.json(apiData);
 });
 
-// Endpoint /push siêu bảo mật kèm HMAC độc quyền của ông
-app.post('/push', (req, res) => {
-  try {
-    let { job, players, sea, tags, current_boss, signature, timestamp } = req.body;
-
-    if (!job || players === undefined || sea === undefined) {
-      return res.status(400).json({ success: false, message: 'Thieu du lieu bat buoc' });
-    }
-
-    // Xác thực Replay Attack (Thời gian lệch không quá 30 giây)
-    if (timestamp) {
-      let currentTime = Date.now();
-      let requestTime = parseInt(timestamp);
-      if (Math.abs(currentTime - requestTime) > 30000) {
-        return res.status(403).json({ success: false, message: 'Request qua han' });
-      }
-    } else {
-      return res.status(403).json({ success: false, message: 'Thieu timestamp chống phá hoại' });
-    }
-
-    // Xác thực chữ ký HMAC
-    if (signature) {
-      let dataToVerify = job + "|" + players + "|" + sea + "|" + timestamp;
-      if (!verifyHMAC(dataToVerify, signature)) {
-        return res.status(403).json({ success: false, message: 'Chu ky khong hop le' });
-      }
-    } else {
-      return res.status(403).json({ success: false, message: 'Thieu chu ky xac thuc' });
-    }
-
-    // Tiến hành giải mã đa lớp
-    let originalJobId;
-    if (job.startsWith(AUTH_PREFIX)) {
-      let encryptedPart = job.substring(AUTH_PREFIX.length);
-      originalJobId = multiLayerDecrypt(encryptedPart);
-    } else {
-      return res.status(403).json({ success: false, message: 'Xac thuc tien to that bai' });
-    }
-
-    if (!originalJobId || originalJobId.length === 0) {
-      return res.status(400).json({ success: false, message: 'Giai ma thong tin that bai' });
-    }
-
-    classifyAndUpdateServer({
-      job_id: originalJobId,
-      players: players,
-      sea: sea,
-      tags: tags || [],
-      current_boss: currentBoss || ''
-    });
-    
-    return res.status(200).json({ success: true, message: 'OK' });
-
-  } catch (error) {
-    console.error('Loi Endpoint Push:', error);
-    return res.status(500).json({ success: false, message: 'Loi server' });
-  }
-});
-
-// Endpoint dự phòng /update (Cũng nâng cấp lên giải mã đa lớp luôn để đồng bộ script mới)
+// Endpoint POST /update - Giong Kuri
 app.post('/update', (req, res) => {
   try {
-    let { job, players, sea, tags, current_boss } = req.body;
+    let { job, players, sea, boss } = req.body;
 
-    if (!job || players === undefined || sea === undefined) {
+    if (!job || !players || !sea || !boss) {
       return res.status(400).json({ success: false, message: 'Thieu du lieu' });
     }
 
-    let originalJobId;
-    if (job.startsWith(AUTH_PREFIX)) {
-      let encryptedPart = job.substring(AUTH_PREFIX.length);
-      originalJobId = multiLayerDecrypt(encryptedPart); // Fix lỗi giải mã đa tầng tại đây
-    } else {
-      return res.status(403).json({ success: false, message: 'Xac thuc that bai' });
+    // Kiem tra tien to
+    if (!job.startsWith(AUTH_PREFIX)) {
+      return res.status(403).json({ success: false, message: 'Sai tien to' });
     }
 
-    classifyAndUpdateServer({
-      job_id: originalJobId,
+    // Giai ma JobId
+    let jobId = decryptJob(job);
+    
+    if (!jobId) {
+      return res.status(400).json({ success: false, message: 'Giai ma that bai' });
+    }
+
+    // Tao server entry giong Kuri
+    let serverEntry = {
+      job: job,           // Giu nguyen job da ma hoa
       players: players,
       sea: sea,
-      tags: tags || [],
-      current_boss: currentBoss || ''
-    });
+      boss: boss,
+      t: Date.now()       // Timestamp
+    };
+
+    // Cap nhat timestamp
+    serverTimestamps[job] = Date.now();
+
+    // Tao muc boss neu chua co
+    if (!apiData.jobs[boss]) {
+      apiData.jobs[boss] = [];
+    }
+
+    // Them vao muc tuong ung
+    apiData.jobs[boss].push(serverEntry);
     
-    return res.status(200).json({ success: true, message: 'OK' });
+    // Xoa trung lap
+    apiData.jobs[boss] = removeDuplicates(apiData.jobs[boss]);
+
+    console.log(`✅ Cap nhat: ${boss} - ${players} players - Sea ${sea}`);
+
+    return res.status(200).json({ success: true });
 
   } catch (error) {
+    console.error('Loi:', error);
     return res.status(500).json({ success: false, message: 'Loi server' });
   }
 });
 
 app.listen(port, () => {
-  console.log(`Vexz API Server dang chay hoan hao tai port ${port}`);
-});
- 
+  console.log(`Vexz API chay tai port ${port}`);
+}); 
