@@ -1,0 +1,14 @@
+{
+  "name": "vexz-api",
+  "version": "1.0.0",
+  "description": "API quan ly va phan loai Server Hop cho Blox Fruits",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "author": "Hoa",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
