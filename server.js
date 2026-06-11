@@ -4,22 +4,19 @@ const port = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// Cau truc giong Kuri
+let uniqueIPs = new Set();
+
 let apiData = {
-  api: {
-    id: "2bcbf4f96454",
-    name: "Vexz Hub",
-    owner: "Hoa",
-    ttl: 60000
-  },
-  jobs: {}
+  "Total Execute": 0,
+  "by": "Hoa",
+  "total_moon_servers": 0,
+  "moon_data": []
 };
 
 let serverTimestamps = {};
 const SECRET_KEY = 42;
 const AUTH_PREFIX = "HoaHubHere-";
 
-// Ham giai ma XOR
 function xorDecrypt(str, key) {
   let result = '';
   for (let i = 0; i < str.length; i++) {
@@ -28,115 +25,88 @@ function xorDecrypt(str, key) {
   return result;
 }
 
-// Ham giai ma Base64
-function base64Decode(str) {
-  return Buffer.from(str, 'base64').toString('utf8');
-}
-
-// Ham giai ma Job giong Kuri (Base64 + XOR)
 function decryptJob(encryptedJob) {
-  // Cat bo tien to
   let encoded = encryptedJob.substring(AUTH_PREFIX.length);
-  // Giai ma Base64
-  let decoded = base64Decode(encoded);
-  // Giai ma XOR
-  let jobId = xorDecrypt(decoded, SECRET_KEY);
-  return jobId;
+  return xorDecrypt(encoded, SECRET_KEY);
 }
 
-// Ham xoa trung lap
+function formatTime() {
+  let now = new Date();
+  let year = now.getFullYear();
+  let month = String(now.getMonth() + 1).padStart(2, '0');
+  let day = String(now.getDate()).padStart(2, '0');
+  let hour = String(now.getHours()).padStart(2, '0');
+  let minute = String(now.getMinutes()).padStart(2, '0');
+  let second = String(now.getSeconds()).padStart(2, '0');
+  return year + '-' + month + '-' + day + ' ' + hour + ':' + minute + ':' + second;
+}
+
 function removeDuplicates(arr) {
   let seen = new Map();
   for (let item of arr) {
-    if (item && item.job) {
-      seen.set(item.job, item);
+    if (item && item.jobId) {
+      seen.set(item.jobId, item);
     }
   }
   return Array.from(seen.values());
 }
 
-// Ham don dep server cu
 function clearStaleServers() {
   let now = Date.now();
-  let threshold = 5 * 60 * 1000; // 5 phut
+  let threshold = 5 * 60 * 1000;
 
-  for (let boss in apiData.jobs) {
-    if (apiData.jobs.hasOwnProperty(boss)) {
-      apiData.jobs[boss] = apiData.jobs[boss].filter(server => {
-        if (server && server.job) {
-          let lastUpdate = serverTimestamps[server.job];
-          return lastUpdate && (now - lastUpdate) < threshold;
-        }
-        return false;
-      });
-      
-      // Xoa muc boss neu rong
-      if (apiData.jobs[boss].length === 0) {
-        delete apiData.jobs[boss];
-      }
+  apiData.moon_data = apiData.moon_data.filter(server => {
+    if (server && server.jobId) {
+      let lastUpdate = serverTimestamps[server.jobId];
+      return lastUpdate && (now - lastUpdate) < threshold;
     }
-  }
-  
-  // Don dep serverTimestamps
-  for (let job in serverTimestamps) {
-    if ((now - serverTimestamps[job]) >= threshold) {
-      delete serverTimestamps[job];
-    }
-  }
+    return false;
+  });
+
+  apiData.total_moon_servers = apiData.moon_data.length;
 }
 
-setInterval(clearStaleServers, 5 * 60 * 1000);
+setInterval(clearStaleServers, 2 * 60 * 1000);
 
-// Endpoint GET /api-data
 app.get('/api-data', (req, res) => {
   res.json(apiData);
 });
 
-// Endpoint POST /update - Giong Kuri
 app.post('/update', (req, res) => {
   try {
-    let { job, players, sea, boss } = req.body;
+    let { job, players } = req.body;
 
-    if (!job || !players || !sea || !boss) {
+    if (!job || players === undefined) {
       return res.status(400).json({ success: false, message: 'Thieu du lieu' });
     }
 
-    // Kiem tra tien to
     if (!job.startsWith(AUTH_PREFIX)) {
       return res.status(403).json({ success: false, message: 'Sai tien to' });
     }
 
-    // Giai ma JobId
     let jobId = decryptJob(job);
     
     if (!jobId) {
       return res.status(400).json({ success: false, message: 'Giai ma that bai' });
     }
 
-    // Tao server entry giong Kuri
+    let userIP = req.headers['x-forwarded-for'] || req.ip || req.connection.remoteAddress;
+    uniqueIPs.add(userIP);
+    apiData["Total Execute"] = uniqueIPs.size;
+
     let serverEntry = {
-      job: job,           // Giu nguyen job da ma hoa
-      players: players,
-      sea: sea,
-      boss: boss,
-      t: Date.now()       // Timestamp
+      Players: players,
+      jobId: jobId,
+      name: "FullMoon",
+      updatedAt: formatTime()
     };
 
-    // Cap nhat timestamp
-    serverTimestamps[job] = Date.now();
+    serverTimestamps[jobId] = Date.now();
+    apiData.moon_data.push(serverEntry);
+    apiData.moon_data = removeDuplicates(apiData.moon_data);
+    apiData.total_moon_servers = apiData.moon_data.length;
 
-    // Tao muc boss neu chua co
-    if (!apiData.jobs[boss]) {
-      apiData.jobs[boss] = [];
-    }
-
-    // Them vao muc tuong ung
-    apiData.jobs[boss].push(serverEntry);
-    
-    // Xoa trung lap
-    apiData.jobs[boss] = removeDuplicates(apiData.jobs[boss]);
-
-    console.log(`✅ Cap nhat: ${boss} - ${players} players - Sea ${sea}`);
+    console.log('FullMoon: ' + jobId + ' | Players: ' + players + ' | IP: ' + userIP);
 
     return res.status(200).json({ success: true });
 
@@ -147,5 +117,5 @@ app.post('/update', (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`Vexz API chay tai port ${port}`);
+  console.log('API chay tai port ' + port);
 }); 
