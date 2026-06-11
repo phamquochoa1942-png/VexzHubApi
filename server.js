@@ -17,6 +17,7 @@ let serverTimestamps = {};
 const SECRET_KEY = 42;
 const AUTH_PREFIX = "HoaHubHere-";
 
+// Ham giai ma XOR
 function xorDecrypt(str, key) {
   let result = '';
   for (let i = 0; i < str.length; i++) {
@@ -25,9 +26,20 @@ function xorDecrypt(str, key) {
   return result;
 }
 
+// Ham giai ma Base64
+function base64Decode(str) {
+  return Buffer.from(str, 'base64').toString('utf8');
+}
+
+// Ham giai ma job hoan chinh (Base64 + XOR)
 function decryptJob(encryptedJob) {
+  // Cat bo tien to
   let encoded = encryptedJob.substring(AUTH_PREFIX.length);
-  return xorDecrypt(encoded, SECRET_KEY);
+  // Giai Base64
+  let decoded = base64Decode(encoded);
+  // Giai XOR
+  let jobId = xorDecrypt(decoded, SECRET_KEY);
+  return jobId;
 }
 
 function formatTime() {
@@ -84,6 +96,7 @@ app.post('/update', (req, res) => {
       return res.status(403).json({ success: false, message: 'Sai tien to' });
     }
 
+    // Giai ma Base64 + XOR
     let jobId = decryptJob(job);
     
     if (!jobId) {
@@ -106,7 +119,7 @@ app.post('/update', (req, res) => {
     apiData.moon_data = removeDuplicates(apiData.moon_data);
     apiData.total_moon_servers = apiData.moon_data.length;
 
-    console.log('FullMoon: ' + jobId + ' | Players: ' + players + ' | IP: ' + userIP);
+    console.log('FullMoon: ' + jobId + ' | Players: ' + players);
 
     return res.status(200).json({ success: true });
 
