@@ -1,7 +1,7 @@
 {
   "name": "vexz-api",
   "version": "1.0.0",
-  "description": "API quan ly va phan loai Server Hop cho Blox Fruits",
+  "description": "API Full Moon Server Hop",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
